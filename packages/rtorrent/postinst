@@ -1,0 +1,54 @@
+#!/bin/sh
+set -e
+case "$1" in
+    configure)
+        PKG_NAME="${DPKG_MAINTSCRIPT_PACKAGE}"
+        PKG_VERSION="$(dpkg-query -W -f='${Version}' "${PKG_NAME}")"
+        BASE_VERSION="${PKG_VERSION%-*}"
+        INSTALL_BASE="/opt/MediaEase/.binaries/installed/${PKG_NAME}_${BASE_VERSION}"
+        INSTALL_USR="${INSTALL_BASE}/usr"
+        ENV_FILE="${INSTALL_BASE}/.env"
+        case "${PKG_NAME}" in
+        *-next)
+            PRIORITY=60
+            ;;
+        *-oldstable)
+            PRIORITY=40
+            ;;
+        *-stable)
+            PRIORITY=50
+            ;;
+        *)
+            PRIORITY=40
+            ;;
+        esac
+        if [ -d "${INSTALL_USR}/include/torrent" ]; then
+            update-alternatives --install \
+                /usr/include/torrent torrent \
+                "${INSTALL_USR}/include/torrent" ${PRIORITY}
+        fi
+        if [ -f "${INSTALL_USR}/lib/pkgconfig/libtorrent.pc" ]; then
+            update-alternatives --install \
+                /usr/lib/x86_64-linux-gnu/pkgconfig/libtorrent.pc libtorrent.pc \
+                "${INSTALL_USR}/lib/pkgconfig/libtorrent.pc" ${PRIORITY}
+        fi
+        cat > "${ENV_FILE}" <<EOF2
+export CPATH="${INSTALL_BASE}/include:\$CPATH"
+export C_INCLUDE_PATH="${INSTALL_BASE}/include:\$C_INCLUDE_PATH"
+export CPLUS_INCLUDE_PATH="${INSTALL_BASE}/include:\$CPLUS_INCLUDE_PATH"
+export LIBRARY_PATH="${INSTALL_BASE}/lib:\$LIBRARY_PATH"
+export LD_LIBRARY_PATH="${INSTALL_BASE}/lib:\$LD_LIBRARY_PATH"
+export PKG_CONFIG_PATH="${INSTALL_BASE}/lib/pkgconfig:\$PKG_CONFIG_PATH"
+export PATH="${INSTALL_BASE}/bin:\$PATH"
+EOF2
+        if command -v mandb >/dev/null 2>&1; then
+            mandb || true
+        fi
+    ;;
+    abort-upgrade|abort-install|abort-remove)
+    ;;
+    *)
+    ;;
+esac
+
+exit 0
