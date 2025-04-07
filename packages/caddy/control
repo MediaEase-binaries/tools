@@ -1,0 +1,18 @@
+Package: caddy
+Version: @VERSION@
+Section: lib
+Priority: optional
+Architecture: amd64
+License: Apache 2.0
+Maintainer: Matthew Holt <mholt@users.noreply.github.com>
+Installed-Size: @INSTALLED_SIZE@
+Provides: httpd
+Homepage: https://caddyserver.com
+Description: Caddy - Powerful, enterprise-ready, open source web server with automatic HTTPS written in Go
+ .
+ Enabled extra modules:
+ .
+ abiosoft/caddy-exec
+ greenpau/caddy-security
+ .
+ Compiled on @DATE@
