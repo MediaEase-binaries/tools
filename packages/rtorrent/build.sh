@@ -136,7 +136,7 @@ build_xmlrpc() {
         XMLRPC_VERSION="1.64.01"
     fi
     if [ -n "$XMLRPC_VERSION" ]; then
-        local PKGNAME="xmlrpc-c"
+        local PKGNAME="libxmlrpc-c3"
         local PKGFILE="$(find "$EXTRAS_DIR" -name "${PKGNAME}_${XMLRPC_VERSION}*.deb" | head -n 1)"
         if [ -z "$PKGFILE" ]; then
             echo "ERROR: Unable to find xmlrpc-c package file."
