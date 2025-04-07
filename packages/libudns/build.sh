@@ -1,42 +1,55 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$#" -ne 2 ]; then
-    echo "Usage: $0 <libudns version> <build option>"
+# =============================================================================
+# build.sh
+#
+# This script builds the libudns library.
+# Usage:
+# ./build.sh <ipv6_support>
+# =============================================================================
+
+if [ "$#" -ne 1 ]; then
+    echo "Usage: $0 <ipv6_support>"
+    echo "Example: $0 --enable-ipv6|--disable-ipv6"
     exit 1
 fi
 
-LIBUDNS_VERSION="$1"
-LIBUDNS_BUILD_OPTION="$2"
-PKGNAME="libudns"
-BASE_DIR="$PWD/custom_build"
-INSTALL_DIR="$BASE_DIR/install"
-SRC_DIR="$BASE_DIR/udns-${LIBUDNS_VERSION}"
-TARFILE="$PWD/dist/${PKGNAME}/udns_${LIBUDNS_VERSION}.tar.gz"
-FLTO=$(nproc)
-if [ ! -f "$TARFILE" ]; then
-    echo "Error: The file $TARFILE does not exist."
+FLAG="$1"
+if [[ "$FLAG" == "--enable-ipv6" ]]; then
+    IPV6_SUPPORT="ON"
+elif [[ "$FLAG" == "--disable-ipv6" ]]; then
+    IPV6_SUPPORT="OFF"
+else
+    echo "ERROR: IPv6 support must be either --enable-ipv6 or --disable-ipv6"
     exit 1
 fi
-rm -rf "$SRC_DIR"
-mkdir -p "$SRC_DIR/tmp"
-tar -xzf "$TARFILE" -C "$SRC_DIR/tmp"
-TOPDIR=$(ls "$SRC_DIR/tmp" | head -1)
-mv "$SRC_DIR/tmp/$TOPDIR"/* "$SRC_DIR"
-rm -rf "$SRC_DIR/tmp"
-cd "$SRC_DIR"
-export CFLAGS="-O1 -DNDEBUG -g0 -ffunction-sections -fdata-sections -w -flto=$FLTO -pipe"
-export CXXFLAGS="$CFLAGS"
+DESTDIR="${DESTDIR:-/tmp/libudns-build/install-ipv6-${IPV6_SUPPORT}}"
+CORES=$(nproc)
+echo "====> Building libudns with IPv6 support: ${IPV6_SUPPORT}"
+echo "====> Destination directory: ${DESTDIR}"
+mkdir -p "${DESTDIR}/usr/include" "${DESTDIR}/usr/bin" "${DESTDIR}/usr/lib"
+export CFLAGS="-O2 -DNDEBUG -g0 -ffunction-sections -fdata-sections -w -pipe"
+export CXXFLAGS="${CFLAGS}"
 export LDFLAGS="-Wl,--gc-sections -s"
-./configure
-make -j"$FLTO" CFLAGS="$CFLAGS" sharedlib dnsget rblcheck
-mkdir -p "$INSTALL_DIR/usr/include"
-mkdir -p "$INSTALL_DIR/usr/bin"
-mkdir -p "$INSTALL_DIR/usr/lib/x86_64-linux-gnu"
-cp -v udns.h "$INSTALL_DIR/usr/include/"
-cp -v dnsget "$INSTALL_DIR/usr/bin/"
-cp -v rblcheck "$INSTALL_DIR/usr/bin/"
-cp -v libudns.so.0 "$INSTALL_DIR/usr/lib/x86_64-linux-gnu/"
-cp -v libudns.a "$INSTALL_DIR/usr/lib/x86_64-linux-gnu/"
-ln -sf libudns.so.0 "$INSTALL_DIR/usr/lib/x86_64-linux-gnu/libudns.so"
-find "$INSTALL_DIR" -type f -exec file {} \; | grep ELF | cut -d: -f1 | xargs --no-run-if-empty strip --strip-unneeded
+echo "====> Running configure..."
+./configure "$FLAG"
+echo "====> Building libudns..."
+make -j"${CORES}" sharedlib dnsget rblcheck
+echo "====> Installing libudns to ${DESTDIR}..."
+FILES_TO_COPY=(
+    "udns.h:${DESTDIR}/usr/include/"
+    "dnsget:${DESTDIR}/usr/bin/"
+    "rblcheck:${DESTDIR}/usr/bin/"
+    "libudns.so.0:${DESTDIR}/usr/lib/"
+    "libudns.a:${DESTDIR}/usr/lib/"
+)
+for FILE in "${FILES_TO_COPY[@]}"; do
+    SRC="${FILE%%:*}"
+    DEST="${FILE##*:}"
+    cp -v "$SRC" "$DEST"
+done
+ln -sf libudns.so.0 "${DESTDIR}/usr/lib/libudns.so"
+echo "====> libudns build completed successfully with IPv6 support: ${IPV6_SUPPORT}"
+echo "====> Files are installed in ${DESTDIR}"
+exit 0
