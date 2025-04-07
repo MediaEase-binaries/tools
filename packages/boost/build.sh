@@ -2,228 +2,244 @@
 set -e
 
 # =============================================================================
-# build.sh
+# build-boost.sh
 #
 # This script builds the latest version of Boost and packages it as a .deb file
-# that installs to /tmp/boost.
+# that installs to a standard Debian-like directory structure.
 #
 # Usage:
-# ./build.sh <VERSION>
+# ./build.sh <VERSION> [--nobuild]
 # Example:
 # ./build.sh 1.84.0 or 1.88.0_rc1
+# ./build.sh 1.84.0 --nobuild
 #
 # Notes:
-# - Installs to /tmp/boost (temporary location for libtorrent-rasterbar builds)
-# - Creates a Debian package for easy installation/uninstallation
+# - With --nobuild: Installs directly to /usr
+# - Without --nobuild: Creates a .deb package with Debian-like structure
 # =============================================================================
 
 usage() {
-    echo "Usage: $0 <VERSION>"
+    echo "Usage: $0 <VERSION> [--nobuild]"
     echo "Example: $0 1.84.0 or 1.88.0_rc1"
+    echo "         $0 1.84.0 --nobuild"
     exit 1
 }
 
-if [ $# -ne 1 ]; then
+if [ $# -lt 1 ] || [ $# -gt 2 ]; then
     usage
 fi
 
 # -----------------------------------------------------------------------------
 # 0) Parameter analysis and definition of global variables
 # -----------------------------------------------------------------------------
-INPUT_VERSION="$1"                           # Ex: "1.84.0" or "1.88.0_rc1"
+INPUT_VERSION="$1"
+NOBUILD=false
+if [ "$2" == "--nobuild" ]; then
+    NOBUILD=true
+    PREFIX="/usr"
+else
+    # Using empty prefix for .deb package as we'll handle paths manually
+    PREFIX=""
+fi
+
 BOOST_VERSION="${INPUT_VERSION}"
 BUILD="1build1"
 FULL_VERSION="${BOOST_VERSION//_rc[0-9]*/}-${BUILD}"
-
+PYTHON_VERSION=$(python3 --version | awk '{print $2}')
+PYTHON_VERSION_SHORT=$(echo "$PYTHON_VERSION" | cut -d. -f1-2)
+# Get exact Python version without dots (e.g. 311 for 3.11)
+PYTHON_VERSION_NO_DOTS=$(echo "$PYTHON_VERSION" | sed 's/\.//g' | cut -c1-3)
+GCC_VERSION=$(gcc -dumpversion | cut -d. -f1)
 echo "====> Building boost $BOOST_VERSION (build: $BUILD)"
 echo "====> Full version: $FULL_VERSION"
+echo "====> Installation prefix: $PREFIX"
+echo "====> No package build: $NOBUILD"
+echo "====> GCC version: $GCC_VERSION"
+echo "====> Python version: $PYTHON_VERSION (short: $PYTHON_VERSION_SHORT, no dots: $PYTHON_VERSION_NO_DOTS)"
 
 WHEREAMI="$(dirname "$(readlink -f "$0")")"
 ARCHITECTURE="amd64"
-PREFIX="/tmp/boost"
 BASE_DIR="$PWD/custom_build"
 mkdir -p "$BASE_DIR"
 INSTALL_DIR="$BASE_DIR/install"
 mkdir -p "$INSTALL_DIR"
-DEBIAN_DIR="$BASE_DIR/debian"
-mkdir -p "$DEBIAN_DIR/DEBIAN"
 
-# Determine number of CPU cores for parallel build
-CORES=$(nproc)
+# For .deb package, these are the directories we'll create
+if [ "$NOBUILD" = false ]; then
+    mkdir -p "$INSTALL_DIR/usr/include/c++/$GCC_VERSION/bits"
+    mkdir -p "$INSTALL_DIR/usr/share/aclocal"
+    mkdir -p "$INSTALL_DIR/usr/share/lintian/overrides"
+    mkdir -p "$INSTALL_DIR/usr/share/doc/autoconf-archive/html"
+    mkdir -p "$INSTALL_DIR/usr/share/doc/libboost$BOOST_VERSION"
+    mkdir -p "$INSTALL_DIR/etc/default/boost"
+    mkdir -p "$INSTALL_DIR/usr/lib/x86_64-linux-gnu/cmake"
+    mkdir -p "$INSTALL_DIR/usr/bin"
+fi
 
 # -----------------------------------------------------------------------------
 # 1) Download and extract Boost
 # -----------------------------------------------------------------------------
 build_boost() {
     echo "====> Downloading and extracting Boost $BOOST_VERSION"
-    
-    # Formater le nom du fichier en fonction de la version
     local VERSION_UNDERSCORE="${BOOST_VERSION//./_}"
-    
-    # Nettoyer les anciens fichiers boost_*
     echo "====> Cleaning any existing boost directories"
     cd "$BASE_DIR"
     rm -rf boost_*
-    
-    # Télécharger Boost
     echo "====> Downloading Boost"    
     if [[ "$BOOST_VERSION" == *"_rc"* ]]; then
-        # Version candidate (RC)
-        local BASE_VERSION=$(echo "$BOOST_VERSION" | sed 's/_rc[0-9]*//')
+        local BASE_VERSION
+        BASE_VERSION=$(echo "$BOOST_VERSION" | sed 's/_rc[0-9]*//')
         echo "====> Using RC version: base=$BASE_VERSION, rc from $BOOST_VERSION"
         wget "https://archives.boost.io/release/$BASE_VERSION/source/boost_${VERSION_UNDERSCORE}.tar.gz" -O "boost.tar.gz"
     else
-        # Version stable
         wget "https://archives.boost.io/release/$BOOST_VERSION/source/boost_${VERSION_UNDERSCORE}.tar.gz" -O "boost.tar.gz"
     fi
-    
-    # Extraire l'archive
     echo "====> Extracting archive"
     tar xzf "boost.tar.gz"
     rm "boost.tar.gz"
-    
-    # Trouver le répertoire réellement créé
     local SRC_DIR=$(find "$BASE_DIR" -maxdepth 1 -type d -name "boost_*" | head -n 1)
-    
     if [ -z "$SRC_DIR" ]; then
         echo "ERROR: Could not find extracted Boost directory. Contents of $BASE_DIR:"
         ls -la "$BASE_DIR"
         exit 1
     fi
-    
     echo "====> Found Boost source directory: $SRC_DIR"
     cd "$SRC_DIR" || { echo "Cannot change to directory $SRC_DIR"; exit 1; }
-    
-    # Bootstrap
-    echo "====> Bootstrapping Boost"
-    ./bootstrap.sh --with-libraries=system
-    
-    # Installation locale directe (pour créer la structure de répertoires)
-    mkdir -p "$INSTALL_DIR$PREFIX"
-    mkdir -p "$INSTALL_DIR$PREFIX/bin"
-    mkdir -p "$INSTALL_DIR$PREFIX/share/boost-build"
-    
-    # Build with custom prefix for temporary installation
-    echo "====> Building Boost with prefix $PREFIX and installing to $INSTALL_DIR$PREFIX"
-    ./b2 -j"$CORES" \
-        --prefix="$INSTALL_DIR$PREFIX" \
-        --build-dir="$BASE_DIR/build" \
+    echo "====> Ensuring Python development files are installed"
+    sudo apt-get update
+    sudo apt-get install -y python3-dev
+    echo "====> Bootstrapping Boost with Python $PYTHON_VERSION_SHORT"
+    cat > user-config.jam << EOF
+using python : $PYTHON_VERSION_SHORT : /usr/bin/python$PYTHON_VERSION_SHORT : /usr/include/python${PYTHON_VERSION_SHORT} : /usr/lib ;
+EOF
+    ./bootstrap.sh --with-libraries=system,python --with-python=/usr/bin/python3 --with-python-version="$PYTHON_VERSION_SHORT"
+    grep -q "using python" project-config.jam || echo "using python : $PYTHON_VERSION_SHORT : /usr/bin/python$PYTHON_VERSION_SHORT : /usr/include/python${PYTHON_VERSION_SHORT} : /usr/lib ;" >> project-config.jam
+}
+
+# -----------------------------------------------------------------------------
+# 2) Create Debian package with proper directory structure
+# -----------------------------------------------------------------------------
+create_deb_package() {
+    echo "====> Creating Debian package with proper directory structure"
+    local SRC_DIR=$(find "$BASE_DIR" -maxdepth 1 -type d -name "boost_*" | head -n 1)
+    if [ -z "$SRC_DIR" ]; then
+        echo "ERROR: Could not find Boost source directory."
+        exit 1
+    fi
+    cd "$SRC_DIR" || { echo "Cannot change to directory $SRC_DIR"; exit 1; }
+    echo "====> Building Boost libraries"
+    ./b2 -j"$(nproc)" \
         variant=release \
         link=static,shared \
         runtime-link=shared \
         threading=multi \
-        cxxflags="-std=c++11 -fPIC" \
+        cxxflags="-std=c++17 -fPIC" \
         --layout=system \
-        install
-    
-    # Copier les outils de build (b2, bjam) et les fichiers .jam
-    echo "====> Copying build tools (b2, bjam) and .jam files"
-    
-    # Copier b2 et bjam
-    cp -p "$SRC_DIR/b2" "$INSTALL_DIR$PREFIX/bin/"
-    ln -sf "$PREFIX/bin/b2" "$INSTALL_DIR$PREFIX/bin/bjam"
-    
-    # Copier les fichiers .jam et autres fichiers de build
-    cp -rp "$SRC_DIR/boost-build.jam" "$INSTALL_DIR$PREFIX/share/boost-build/"
-    cp -rp "$SRC_DIR/boostcpp.jam" "$INSTALL_DIR$PREFIX/share/boost-build/"
-    
-    # Copier tools/build pour les règles de build
-    mkdir -p "$INSTALL_DIR$PREFIX/share/boost-build/tools"
-    cp -rp "$SRC_DIR/tools/build" "$INSTALL_DIR$PREFIX/share/boost-build/tools/"
-    
-    # Copier project-config.jam
-    {
-        echo "# Boost.Build Configuration"
-        echo "# Automatically generated by boost-builds package"
-        echo "import option ;"
-        echo "import feature ;"
-        echo "using gcc ;"
-    } > "$INSTALL_DIR$PREFIX/share/boost-build/project-config.jam"
-    
-    # Créer un script wrapper pour b2
-    cat > "$INSTALL_DIR$PREFIX/bin/b2-wrapper" << 'EOF'
-#!/bin/bash
-export BOOST_BUILD_PATH=/tmp/boost/share/boost-build
-exec /tmp/boost/bin/b2 "$@"
-EOF
-    chmod +x "$INSTALL_DIR$PREFIX/bin/b2-wrapper"
-    
-    cd "$WHEREAMI"
-}
-
-# -----------------------------------------------------------------------------
-# 2) Create Debian package
-# -----------------------------------------------------------------------------
-create_deb_package() {
-    echo "====> Creating Debian package"
-    
-    # Vérifier que le répertoire d'installation contient des fichiers
-    if [ ! -d "$INSTALL_DIR$PREFIX" ] || [ -z "$(ls -A "$INSTALL_DIR$PREFIX")" ]; then
-        echo "ERROR: Installation directory $INSTALL_DIR$PREFIX is empty or does not exist!"
-        echo "Contents of $INSTALL_DIR:"
-        ls -la "$INSTALL_DIR"
-        exit 1
+        --with-python \
+        --with-system \
+        python="$PYTHON_VERSION_SHORT" \
+        install \
+        --prefix=stage \
+        --cmake
+        
+    echo "====> Installing to temporary location with proper directory structure"
+    find stage/include/boost -type d -empty -delete
+    cp -a stage/include/boost "$INSTALL_DIR/usr/include/"
+    cp stage/lib/libboost_*.so* "$INSTALL_DIR/usr/lib/x86_64-linux-gnu/" 2>/dev/null || true
+    cp stage/lib/libboost_*.a "$INSTALL_DIR/usr/lib/x86_64-linux-gnu/" 2>/dev/null || true
+    CMAKE_STAGE="stage/lib/cmake"
+    if [ -d "$CMAKE_STAGE" ]; then
+        for f in BoostConfig.cmake BoostConfigVersion.cmake; do
+            find "$CMAKE_STAGE" -name "$f" -exec cp --parents {} "$INSTALL_DIR/usr/lib/x86_64-linux-gnu/cmake/" \;
+        done
+        find "$CMAKE_STAGE" -name "BoostDetectToolset-*.cmake" -exec cp --parents {} "$INSTALL_DIR/usr/lib/x86_64-linux-gnu/cmake/" \;
+        find "$CMAKE_STAGE" -name "boost_headers-config*.cmake" -exec cp --parents {} "$INSTALL_DIR/usr/lib/x86_64-linux-gnu/cmake/" \;
     fi
-    
-    # Create package directories
-    mkdir -p "$DEBIAN_DIR$PREFIX"
-    
-    # Create DEBIAN control file
-    cat > "$DEBIAN_DIR/DEBIAN/control" << EOF
-Package: boost-mediaease
+    mkdir -p "$INSTALL_DIR/usr/share/lintian/overrides"
+    BOOST_SHORT_VERSION="$(printf '%s' "$BOOST_VERSION" | cut -d. -f1-2)"
+    echo "libboost${BOOST_SHORT_VERSION}-dev: extra-license-file" > "$INSTALL_DIR/usr/share/lintian/overrides/libboost${BOOST_SHORT_VERSION}-dev"
+    cp b2 "$INSTALL_DIR/usr/bin/"
+    chmod +x "$INSTALL_DIR/usr/bin/b2"
+    cp Jamroot "$INSTALL_DIR/etc/default/boost/"
+    cp boost-build.jam "$INSTALL_DIR/etc/default/boost/"
+    cp project-config.jam "$INSTALL_DIR/etc/default/boost/"
+    cp user-config.jam "$INSTALL_DIR/etc/default/boost/"
+    mkdir -p "$INSTALL_DIR/DEBIAN"
+    cat > "$INSTALL_DIR/DEBIAN/control" << EOF
+Package: libboost-all-dev
 Version: $FULL_VERSION
 Architecture: $ARCHITECTURE
-Maintainer: ${COMMITTER_NAME} <${COMMITTER_EMAIL}>
-Description: Boost libraries (temporary installation for libtorrent-rasterbar builds)
- This package contains the Boost C++ libraries installed in /tmp/boost.
- It is intended to be used temporarily during the build process of
- libtorrent-rasterbar and is not meant for permanent installation.
- Includes the b2/bjam build tools and necessary .jam files.
+Maintainer: ${COMMITTER_NAME:-"MediaEase"} <${COMMITTER_EMAIL:-"info@mediaease.org"}>
+Depends: python3-dev
+Description: Boost libraries (MediaEase build with Python $PYTHON_VERSION_SHORT support)
+ The Boost web site provides free, peer-reviewed, portable C++ source libraries. 
+ The emphasis is on libraries which work well with the C++ Standard Library. 
+ One goal is to establish "existing practice" and provide reference implementations so that the Boost libraries are suitable for eventual standardization. 
+ Some of the libraries have already been proposed for inclusion in the C++ Standards Committee's upcoming C++ Standard Library Technical Report.
+ .
+ Compiled on $(date +%Y-%m-%d)
 Section: libs
 Priority: optional
 EOF
-    
-    # Create postinst script
-    cat > "$DEBIAN_DIR/DEBIAN/postinst" << EOF
+    cat > "$INSTALL_DIR/DEBIAN/postinst" << 'EOF'
 #!/bin/sh
 set -e
-chmod -R 755 $PREFIX
-# Make sure the build tools are executable
-chmod +x $PREFIX/bin/b2
-chmod +x $PREFIX/bin/b2-wrapper
-ln -sf $PREFIX/bin/b2 $PREFIX/bin/bjam
+# Create symbolic link for bjam
+ln -sf /usr/bin/b2 /usr/bin/bjam
 EOF
-    chmod 755 "$DEBIAN_DIR/DEBIAN/postinst"
-    
-    # Create prerm script
-    cat > "$DEBIAN_DIR/DEBIAN/prerm" << EOF
+    chmod 755 "$INSTALL_DIR/DEBIAN/postinst"
+    cat > "$INSTALL_DIR/DEBIAN/prerm" << 'EOF'
 #!/bin/sh
 set -e
-# No specific actions needed
+# Remove symbolic link for bjam if it exists
+if [ -L /usr/bin/bjam ]; then
+    rm -f /usr/bin/bjam
+fi
 EOF
-    chmod 755 "$DEBIAN_DIR/DEBIAN/prerm"
-    
-    # Copy files from INSTALL_DIR to DEBIAN_DIR
-    echo "====> Copying files from $INSTALL_DIR$PREFIX to $DEBIAN_DIR$PREFIX"
-    rsync -a "$INSTALL_DIR$PREFIX/" "$DEBIAN_DIR$PREFIX/"
-    
-    # Generate md5sums file
-    cd "$DEBIAN_DIR"
-    find .  -type f -exec file {} \; | grep ELF | cut -d: -f1 | xargs --no-run-if-empty strip --strip-unneeded
+    chmod 755 "$INSTALL_DIR/DEBIAN/prerm"
+    echo "====> Copying files from $INSTALL_DIR to $INSTALL_DIR"
+    cd "$INSTALL_DIR"
+    find . -type f -exec file {} \; | grep ELF | cut -d: -f1 | xargs --no-run-if-empty strip --strip-unneeded
     find . -type f ! -path "./DEBIAN/*" -exec md5sum {} \; > DEBIAN/md5sums
-    
-    # Build the package
     cd "$WHEREAMI"
-    dpkg-deb --build -Zxz -z9 -Sextreme --root-owner-group "$DEBIAN_DIR" "$WHEREAMI/boost-mediaease_${BOOST_VERSION}-${BUILD}_${ARCHITECTURE}.deb"
-    
-    echo "====> Debian package created: boost-mediaease_${BOOST_VERSION}-${BUILD}_${ARCHITECTURE}.deb"
+    dpkg-deb --build -Zxz -z9 -Sextreme --root-owner-group "$INSTALL_DIR" "$WHEREAMI/libboost-all-dev_${BOOST_VERSION}-${BUILD}_${ARCHITECTURE}.deb"
+    echo "====> Debian package created: libboost-all-dev_${BOOST_VERSION}-${BUILD}_${ARCHITECTURE}.deb"
+}
+
+# -----------------------------------------------------------------------------
+# 3) Direct installation (when --nobuild is used)
+# -----------------------------------------------------------------------------
+direct_install() {
+    local SRC_DIR=$(find "$BASE_DIR" -maxdepth 1 -type d -name "boost_*" | head -n 1)
+    cd "$SRC_DIR" || { echo "Cannot change to directory $SRC_DIR"; exit 1; }
+    sudo ./b2 headers
+    echo "====> Building Boost libraries"
+    sudo ./b2 -j"$(nproc)" \
+        --prefix="$PREFIX" \
+        variant=release \
+        link=static,shared \
+        runtime-link=shared \
+        threading=multi \
+        cxxflags="-std=c++17 -fPIC" \
+        --layout=system \
+        --with-python \
+        python="$PYTHON_VERSION_SHORT" \
+        install
+    sudo ln -sf "$SRC_DIR/b2" /usr/bin/b2
+    sudo ln -sf /usr/bin/b2 /usr/bin/bjam
+    echo "====> Installation complete"
 }
 
 # -----------------------------------------------------------------------------
 # Main execution
 # -----------------------------------------------------------------------------
 build_boost
-create_deb_package
+
+if [ "$NOBUILD" = true ]; then
+    direct_install
+else
+    create_deb_package
+fi
 
 echo "====> All done!"
 exit 0 

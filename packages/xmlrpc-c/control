@@ -1,0 +1,14 @@
+Package: libxmlrpc-c3
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: @MAINTAINER@
+Installed-Size: @INSTALLED_SIZE@
+Depends: libc6
+Section: libs
+Priority: optional
+Homepage: http://xmlrpc-c.sourceforge.net/
+Description: XML-RPC C/C++ library
+  XML-RPC is a quick-and-dirty way to make procedure calls over the Internet.
+  It works by sending XML process calls over HTTP and receiving XML responses.
+  .
+  Compiled on @DATE@.

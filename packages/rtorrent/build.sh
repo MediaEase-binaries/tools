@@ -29,7 +29,7 @@ set -e
 
 usage() {
     echo "Usage: $0 <VERSION_WITH_OPTIONAL_BUILD>"
-    echo "Exemple: $0 0.13.8-1 ou 0.14.0"
+    echo "Exemple: $0 0.9.8-1 ou 0.15.0"
     exit 1
 }
 
@@ -40,38 +40,43 @@ fi
 # -----------------------------------------------------------------------------
 # 0) Parameter analysis and definition of global variables
 # -----------------------------------------------------------------------------
-INPUT_VERSION="$1"                           # Ex: "0.13.8-1" or "0.14.0"
-REAL_VERSION="${INPUT_VERSION%%-*}"          # Ex: "0.13.8"
+INPUT_VERSION="$1"                           # Ex: "0.9.8" or "0.10.0"
+REAL_VERSION="${INPUT_VERSION%%-*}"          # Ex: "0.9.8"
 BUILD="${INPUT_VERSION#*-}"                  # Build part, défault "1"
 if [ "$BUILD" = "$REAL_VERSION" ]; then
     BUILD="1build1"
 fi
-FULL_VERSION="${REAL_VERSION}-${BUILD}"      # Ex: "0.13.8-1"
+FULL_VERSION="${REAL_VERSION}-${BUILD}"      # Ex: "0.9.8-1build1"
 
 echo "====> Building rtorrent $REAL_VERSION (build: $BUILD)"
 echo "====> Full version: $FULL_VERSION"
+SKIP_XMLRPC_VERSION=false
 MINOR="$(echo "$REAL_VERSION" | cut -d'.' -f2)"
+PATCH_VERSION="$(echo "$REAL_VERSION" | cut -d'.' -f3)"
 case "$MINOR" in
     9)
-        RT_VER="0.9.8"
+        RT_VER="$INPUT_VERSION"
         LIBTORRENT_VERSION="0.13.8"
         PACKAGE_STABILITY="oldstable"
         FLTO=$(nproc)
         ;;
     10)
-        RT_VER="0.10.0"
+        RT_VER="$INPUT_VERSION"
         LIBTORRENT_VERSION="0.14.0"
         PACKAGE_STABILITY="stable"
         FLTO=$(nproc)
         ;;
     15)
-        RT_VER="0.15.2"
-        LIBTORRENT_VERSION="0.15.2"
+        RT_VER="$INPUT_VERSION"
+        LIBTORRENT_VERSION="$INPUT_VERSION"
         PACKAGE_STABILITY="next"
         FLTO=$(nproc)
+        if [ "$PATCH_VERSION" -ge 2 ]; then
+            SKIP_XMLRPC_VERSION="true"
+        fi
         ;;
     *)
-        echo "ERROR: Unrecognized version '$REAL_VERSION' (expected 0.13.8, 0.10.0 or 0.15.1)."
+        echo "ERROR: Unrecognized version '$REAL_VERSION' (expected 0.9.8, 0.10.0 or 0.15.1,...)."
         exit 1
         ;;
 esac
@@ -81,17 +86,22 @@ else
     XMLRPC_TINYXML="--with-xmlrpc-c"
 fi
 
-WHEREAMI="$(dirname "$(readlink -f "$0")")"
+# Get the absolute path to the tools directory
+WHEREAMI="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+EXTRAS_DIR="$TOOLS_DIR/extras"
+TOOLS_DIR_PACKAGE="$WHEREAMI/packages/rtorrent"
 ARCHITECTURE="amd64"
-PREFIX_BASE="/opt/MediaEase/.binaries/installed/rtorrent-${PACKAGE_STABILITY}_${RT_VER}"
 BASE_DIR="$PWD/custom_build"
 mkdir -p "$BASE_DIR"
 INSTALL_DIR="$BASE_DIR/install"
 mkdir -p "$INSTALL_DIR"
-PATCH_DIR="$BASE_DIR/patches"
-# find the extras dir
-EXTRAS_DIR="$(find /home/runner/work/ -type d -name "extras" | head -n 1)"
-EXTRAS_DIR="$EXTRAS_DIR/rtorrent"
+LIBTORRENT_PATCH_DIR="$EXTRAS_DIR/libtorrent-rakshasa"
+RTORRENT_PATCH_DIR="$EXTRAS_DIR/rtorrent"
+export PACKAGE_STABILITY
+codename=$(lsb_release -cs)
+distro=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
+os=$distro-$codename
+export os
 
 # -----------------------------------------------------------------------------
 # 1) Dumptorrent build
@@ -100,54 +110,60 @@ build_dumptorrent() {
     echo "====> Building dumptorrent"
     local TMP_DIR
     TMP_DIR=$(mktemp -d)
-    dpkg-deb -x "$EXTRAS_DIR"/dumptorrent*.deb "$TMP_DIR"
-    mkdir -p "$INSTALL_DIR/usr/local/bin"
-    chmod +x "$TMP_DIR/usr/bin/*"
-    sudo cp -r "$TMP_DIR/usr/*" "$INSTALL_DIR/usr/local/bin/"
-    local DUMPTORRENT_VERSION
-    DUMPTORRENT_VERSION=$(basename "$EXTRAS_DIR"/dumptorrent*.deb | sed -n 's/.*dumptorrent_\([^-]*\)-.*/\1/p')
-    export DUMPTORRENT_VERSION
+    PKGFILE=$(find / -name "dumptorrent*.deb" | head -n 1)
+    if [ -n "$PKGFILE" ]; then
+        dpkg-deb -x "$PKGFILE" "$TMP_DIR"
+        mkdir -p "$INSTALL_DIR/usr/bin"
+        for file in "$TMP_DIR/usr/bin/"*; do
+            if [ -f "$file" ]; then
+                cp -p "$file" "$INSTALL_DIR/usr/bin/"
+                chmod +x "$INSTALL_DIR/usr/bin/$(basename "$file")"
+            fi
+        done
+        DUMPTORRENT_VERSION=$(basename "$PKGFILE" | sed -E 's/dumptorrent_([0-9]+)\.([0-9]+)(\.[0-9]+)?.*_amd64\.deb/\1.\2\3/')
+        export DUMPTORRENT_VERSION
+    else
+        echo "ERROR: dumptorrent package not found"
+        exit 1
+    fi
+    rm -rf "$TMP_DIR"
 }
 
 # -----------------------------------------------------------------------------
-# 1) Libudns build
+# 2) Libudns build
 # -----------------------------------------------------------------------------
 build_libudns() {
     echo "====> Building libudns"
-    sudo dpkg -i "$EXTRAS_DIR/libudns_0.6.0-ipv6-ON-1build1_ubuntu-latest_amd64.deb"
     local TMP_DIR
     TMP_DIR=$(mktemp -d)
-    dpkg-deb -x "$EXTRAS_DIR/libudns_0.6.0-ipv6-ON-1build1_ubuntu-latest_amd64.deb" "$TMP_DIR"
-    sudo cp -r "$TMP_DIR/usr/" "$INSTALL_DIR/usr/"
-    local LIBUDNS_VERSION
-    LIBUDNS_VERSION="$(dpkg-query -W -f='${Version}' libudns)"
-    export LIBUDNS_VERSION
+    PKGFILE=$(find / -name "libudns*.deb" | head -n 1)
+    if [ -n "$PKGFILE" ]; then
+        dpkg-deb -x "$PKGFILE" "$TMP_DIR"
+        mkdir -p "$INSTALL_DIR/usr/bin" "$INSTALL_DIR/usr/include" "$INSTALL_DIR/usr/lib/x86_64-linux-gnu"
+        cp -p "$TMP_DIR/usr/bin/dnsget" "$INSTALL_DIR/usr/bin/"
+        cp -p "$TMP_DIR/usr/bin/rblcheck" "$INSTALL_DIR/usr/bin/"
+        cp -p "$TMP_DIR/usr/include/udns.h" "$INSTALL_DIR/usr/include/"
+        cp -p "$TMP_DIR/usr/lib/x86_64-linux-gnu/libudns.a" "$INSTALL_DIR/usr/lib/x86_64-linux-gnu/"
+        cp -p "$TMP_DIR/usr/lib/x86_64-linux-gnu/libudns.so.0" "$INSTALL_DIR/usr/lib/x86_64-linux-gnu/"
+        ln -sf libudns.so.0 "$INSTALL_DIR/usr/lib/x86_64-linux-gnu/libudns.so"
+        LIBUDNS_VERSION=$(basename "$PKGFILE" | sed -E 's/libudns_([0-9]+)\.([0-9]+)(\.[0-9]+)?.*_amd64\.deb/\1.\2\3/')
+        export LIBUDNS_VERSION
+    else
+        echo "ERROR: libudns package not found"
+        exit 1
+    fi
+    rm -rf "$TMP_DIR"
 }
 
 # -----------------------------------------------------------------------------
-# 2) xmlrpc-c build
+# 3) xmlrpc-c build
 # -----------------------------------------------------------------------------
 build_xmlrpc() {
     echo "====> Building xmlrpc-c"
-    local XMLRPC_VERSION
-    if [ "$RT_VER" = "0.9.8" ]; then
-        XMLRPC_VERSION="1.59.04"
-    elif [ "$RT_VER" = "0.10.0" ]; then
-        XMLRPC_VERSION="1.64.01"
-    fi
-    if [ -n "$XMLRPC_VERSION" ]; then
-        local PKGNAME="xmlrpc-c"
-        local PKGFILE="$(find "$EXTRAS_DIR" -name "${PKGNAME}_${XMLRPC_VERSION}*.deb" | head -n 1)"
-        if [ -z "$PKGFILE" ]; then
-            echo "ERROR: Unable to find xmlrpc-c package file."
-            exit 1
-        fi
-        sudo dpkg -i "$PKGFILE"
-        local TMP_DIR
-        TMP_DIR=$(mktemp -d)
-        dpkg-deb -x "$PKGFILE" "$TMP_DIR"
-        sudo cp -r "$TMP_DIR/usr/" "$INSTALL_DIR/usr/"
-        rm -rf "$TMP_DIR"
+    local PKGFILE TMP_DIR
+    PKGFILE="$(find "/" -name "libxmlrpc-c3*.deb" | head -n 1)"
+    if [ -n "$PKGFILE" ]; then
+        XMLRPC_VERSION="$(basename "$PKGFILE" | sed -E 's/libxmlrpc-c3_([0-9]+)\.([0-9]+)\.([0-9]+).*_amd64\.deb/\1.\2.\3/')"
         export XMLRPC_VERSION
     else
         export TINYXML2_USED="true"
@@ -155,38 +171,69 @@ build_xmlrpc() {
 }
 
 # -----------------------------------------------------------------------------
-# 3) mktorrent build
+# 4) mktorrent build
 # -----------------------------------------------------------------------------
 build_mktorrent() {
     echo "====> Building mktorrent"
-    sudo dpkg -i "$EXTRAS_DIR"/mktorrent*.deb
-    local MKTORRENT_VERSION
-    MKTORRENT_VERSION="$(dpkg-query -W -f='${Version}' mktorrent)"
     local TMP_DIR
     TMP_DIR=$(mktemp -d)
-    dpkg-deb -x "$EXTRAS_DIR"/mktorrent*.deb "$TMP_DIR"
-    sudo cp -r "$TMP_DIR/usr/" "$INSTALL_DIR/usr/"
+    PKGFILE=$(find / -name "mktorrent*.deb" | head -n 1)
+    if [ -n "$PKGFILE" ]; then
+        dpkg-deb -x "$PKGFILE" "$TMP_DIR"
+        mkdir -p "$INSTALL_DIR/usr/bin"
+        cp -p "$TMP_DIR/usr/bin/mktorrent" "$INSTALL_DIR/usr/bin/"
+        if [ -f "$TMP_DIR/usr/share/man/man1/mktorrent.1" ]; then
+            mkdir -p "$INSTALL_DIR/usr/share/man/man1"
+            cp -p "$TMP_DIR/usr/share/man/man1/mktorrent.1" "$INSTALL_DIR/usr/share/man/man1/"
+        fi
+        MKTORRENT_VERSION=$(basename "$PKGFILE" | sed -E 's/mktorrent_([0-9]+)\.([0-9]+)(\.[0-9]+)?.*_amd64\.deb/\1.\2\3/')
+        export MKTORRENT_VERSION
+    else
+        echo "ERROR: mktorrent package not found"
+        exit 1
+    fi
     rm -rf "$TMP_DIR"
-    export MKTORRENT_VERSION
 }
 
 # -----------------------------------------------------------------------------
-# 4) libtorrent (rakshasa) build
+# 5) check package versions
+# -----------------------------------------------------------------------------
+check_package_versions() {
+    echo "====> Checking package versions"
+    echo "====> LIBUDNS_VERSION: $LIBUDNS_VERSION"
+    echo "====> XMLRPC_VERSION: $XMLRPC_VERSION"
+    echo "====> MKTORRENT_VERSION: $MKTORRENT_VERSION"
+    echo "====> DUMPTORRENT_VERSION: $DUMPTORRENT_VERSION"
+    if [ -z "$LIBUDNS_VERSION" ] || [ -z "$MKTORRENT_VERSION" ] || [ -z "$DUMPTORRENT_VERSION" ]; then
+        echo "ERROR: Unknown package version."
+        exit 1
+    fi
+    if [ "$SKIP_XMLRPC_VERSION" = true ]; then
+        echo "====> Skipping XMLRPC version check"
+    elif [ -z "$XMLRPC_VERSION" ]; then
+            echo "ERROR: Unknown XMLRPC version."
+            exit 1
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# 6) libtorrent (rakshasa) build
 # -----------------------------------------------------------------------------
 build_libtorrent() {
     echo "====> Building libtorrent (version $LIBTORRENT_VERSION)"
-    local GIT_REPO_URL="https://github.com/rakshasa/libtorrent.git"
-    local SRC_DIR="$BASE_DIR/libtorrent-rakshasa-$LIBTORRENT_VERSION"
+    local GIT_REPO_URL SRC_DIR TMP_DIR
+    TMP_DIR=$(mktemp -d)
+    GIT_REPO_URL="https://github.com/rakshasa/libtorrent.git"
+    SRC_DIR="$BASE_DIR/libtorrent-rakshasa-$LIBTORRENT_VERSION"
     rm -rf "$SRC_DIR"
     git clone --depth 1 --branch "v${LIBTORRENT_VERSION}" "$GIT_REPO_URL" "$SRC_DIR"
     cd "$SRC_DIR"
     git --no-pager log -1 --oneline
     if [ "$LIBTORRENT_VERSION" = "0.13.8" ]; then
-        local PATCH_DIR="$PATCH_DIR/libtorrent"
         echo "Applying patches for libtorrent 0.13.8..."
-        for patch in udns scanf lookup-cache piece-boundary; do
-            if [ -f "$PATCH_DIR/${patch}-0.13.8.patch" ]; then
-                patch -p1 --fuzz=3 --ignore-whitespace --verbose --unified < "$PATCH_DIR/${patch}-0.13.8.patch" || true
+        for patch in udns scanf lookup-cache; do
+            if [ -f "$LIBTORRENT_PATCH_DIR/${patch}-0.13.8.patch" ]; then
+                patch -p1 --fuzz=3 --ignore-whitespace --verbose --unified < "$LIBTORRENT_PATCH_DIR/${patch}-0.13.8.patch" || true
             fi
         done
     fi
@@ -202,34 +249,26 @@ build_libtorrent() {
     fi
     autoreconf -vfi
     ./configure \
-        --prefix="$PREFIX_BASE" \
         --disable-debug \
         --with-posix-fallocate \
         --enable-aligned \
         --enable-static \
         --disable-shared
     make -j"$FLTO"
-    make install DESTDIR="$INSTALL_DIR"
-    make clean
-    make distclean
-    ./configure \
-        --disable-debug \
-        --with-posix-fallocate \
-        --enable-aligned \
-        --enable-static \
-        --disable-shared
-    make -j"$FLTO"
-    sudo make install
+    make install DESTDIR="$TMP_DIR"
+    cp -pR "$TMP_DIR/usr/"* "/usr/"
     cd "$WHEREAMI"
 }
 
 # -----------------------------------------------------------------------------
-# 5) rtorrent build
+# 7) rtorrent build
 # -----------------------------------------------------------------------------
 build_rtorrent() {
     echo "====> Building rtorrent"
-    local GIT_REPO_URL="https://github.com/rakshasa/rtorrent.git"
-    local SRC_DIR="$BASE_DIR/rtorrent-$REAL_VERSION"
+    local GIT_REPO_URL SRC_DIR mem_available_kb mem_available_mb rtorrent_level rtorrent_flto rtorrent_pipe rtorrent_profile TMP_DIR
+    TMP_DIR=$(mktemp -d)
+    GIT_REPO_URL="https://github.com/rakshasa/rtorrent.git"
+    SRC_DIR="$BASE_DIR/rtorrent-$REAL_VERSION"
     rm -rf "$SRC_DIR"
     git clone --depth 1 --branch "v$RT_VER" "$GIT_REPO_URL" "$SRC_DIR"
     cd "$SRC_DIR"
@@ -237,25 +276,30 @@ build_rtorrent() {
     export CFLAGS="-Os -DNDEBUG -g0 -ffunction-sections -fdata-sections"
     export LDFLAGS="-Wl,--gc-sections -s -lssl -lcrypto -lz"
     export LIBS="$LIBS -lssl -lcrypto -lz"
-    if [ "$REAL_VERSION" = "0.13.8" ]; then
-        echo "Applying patches for rtorrent 0.13.8..."
-        local PATCH_DIR="$PATCH_DIR/rtorrent"
+    if [[ "$(printf '%s\n' "$REAL_VERSION" "0.15.2" | sort -V | head -n1)" = "$REAL_VERSION" ]] && [ "$REAL_VERSION" != "0.15.2" ]; then
+        echo "Applying patches for rtorrent $REAL_VERSION..."
         for patch in fast-session-loading lockfile lockfile rtorrent-ml rtorrent-scrape scgi session-file; do
-            if [ -f "$PATCH_DIR/${patch}-0.13.8.patch" ]; then
-                patch -p1 --fuzz=3 --ignore-whitespace --verbose --unified < "$PATCH_DIR/${patch}-0.13.8.patch" || true
+            if [ -f "$RTORRENT_PATCH_DIR/${patch}-0.9.8.patch" ]; then
+                patch -p1 --fuzz=3 --ignore-whitespace --verbose --unified < "$RTORRENT_PATCH_DIR/${patch}-${REAL_VERSION}.patch" || true
             fi
         done
+        if [ "$XMLRPC_VERSION" == "1.59.04" ]; then
+            for patch in xmlrpc-fix xmlrpc-logic; do
+                if [ -f "$RTORRENT_PATCH_DIR/${patch}-0.9.8.patch" ]; then
+                    patch -p1 --fuzz=3 --ignore-whitespace --verbose --unified < "$RTORRENT_PATCH_DIR/${patch}-0.9.8.patch" || true
+                fi
+            done
+        fi
     fi
     [[ -f ./autogen.sh ]] && ./autogen.sh || true
     autoreconf -vfi
-    ./configure --with-ncursesw --prefix="$PREFIX_BASE" $XMLRPC_TINYXML
-    local mem_available_kb
+    ./configure --with-ncursesw $XMLRPC_TINYXML
     mem_available_kb=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
-    local mem_available_mb=$((mem_available_kb / 1024))
-    local rtorrent_level=""
-    local rtorrent_flto=""
-    local rtorrent_pipe=""
-    local rtorrent_profile="-fprofile-use"
+    mem_available_mb=$((mem_available_kb / 1024))
+    rtorrent_level=""
+    rtorrent_flto=""
+    rtorrent_pipe=""
+    rtorrent_profile="-fprofile-use"
     case "$FLTO" in
         1)
             rtorrent_level="-O1"
@@ -276,164 +320,75 @@ build_rtorrent() {
         rtorrent_pipe="-pipe"
     fi
     make -j"$FLTO" CXXFLAGS="-w $rtorrent_level $rtorrent_flto $rtorrent_pipe $rtorrent_profile"
-    make install DESTDIR="$INSTALL_DIR"
-    make clean
-    make distclean
-    ./configure --with-ncursesw  $XMLRPC_TINYXML
-    make -j"$FLTO" CXXFLAGS="-w $rtorrent_level $rtorrent_flto $rtorrent_pipe $rtorrent_profile"
-    sudo make install
+    make install DESTDIR="$TMP_DIR"
+    cp -pR "$TMP_DIR/"* "$INSTALL_DIR/"
+    find "$INSTALL_DIR" -type f -exec file {} \; | grep ELF | cut -d: -f1 | while read -r file; do
+        if [ -f "$file" ] && [ -x "$file" ]; then
+            strip --strip-unneeded "$file" 2>/dev/null || true
+            if file "$file" | grep -q "ELF.*executable" && command -v upx >/dev/null 2>&1; then
+                upx --best --lzma "$file" 2>/dev/null || true
+            fi
+        fi
+        if [ -f "$file" ] && [ -x "$file" ] && [[ "$file" == *"/usr/local/bin/"* ]]; then
+            cp -p "$file" "$INSTALL_DIR/usr/bin/"
+        fi
+        filename="$(basename "$file")"
+        if [[ "$filename" != *.so* ]]; then
+            chmod +x "$INSTALL_DIR/usr/bin/$filename"
+        fi
+    done
+    rm -rf "$INSTALL_DIR/usr/local/bin"
+    find "$INSTALL_DIR" -type d -empty -delete
     cd "$WHEREAMI"
 }
 
 # -----------------------------------------------------------------------------
-# 6) Final packaging
+# 8) Final packaging
 # -----------------------------------------------------------------------------
 package_rtorrent_deb() {
+    set -e
     echo "====> Packaging rtorrent to .deb file"
-    local PKG_DIR="$BASE_DIR/pkg_rtorrent"
+    local PKG_DIR
+    PKG_DIR="$BASE_DIR/pkg_rtorrent"
+    DEB_DIR="$PKG_DIR/DEBIAN"
     rm -rf "$PKG_DIR"
-    mkdir -p "$PKG_DIR/DEBIAN"
-    cp -r "$INSTALL_DIR/opt" "$PKG_DIR/"
-    find "$PKG_DIR"  -type f -exec file {} \;   | grep ELF   | cut -d: -f1   | xargs --no-run-if-empty strip --strip-unneeded
-    find "$PKG_DIR" -type f ! -path './DEBIAN/*' -exec md5sum {} \; > "$PKG_DIR/DEBIAN/md5sums"
-    local runtime_size
-    runtime_size=$(du -s -k "$PKG_DIR/opt" | cut -f1)
+    mkdir -p "$DEB_DIR"
+    mkdir -p "$PKG_DIR/opt/MediaEase/.binaries/installed/rtorrent-${PACKAGE_STABILITY}_${RT_VER}/"
+    rsync -a "$INSTALL_DIR/" "$PKG_DIR/opt/MediaEase/.binaries/installed/rtorrent-${PACKAGE_STABILITY}_${RT_VER}/"
+    if [ -z "$(ls -A "$PKG_DIR/opt/MediaEase/.binaries/installed/rtorrent-${PACKAGE_STABILITY}_${RT_VER}/")" ]; then
+        echo "ERROR: $PKG_DIR/opt/MediaEase/.binaries/installed/rtorrent-${PACKAGE_STABILITY}_${RT_VER}/ is empty."
+        exit 1
+    fi
+    echo "====> Copying control file"
+    cp -pr "$TOOLS_DIR_PACKAGE/control" "$DEB_DIR/control"
+    echo "====> Copying postinst and prerm files"
+    cp -pr "$TOOLS_DIR_PACKAGE/postinst" "$DEB_DIR/postinst"
+    cp -pr "$TOOLS_DIR_PACKAGE/prerm" "$DEB_DIR/prerm"
+    echo "====> Setting control file values"
     if [ "$TINYXML2_USED" == true ]; then
         VERSION="$(dpkg-query -W -f='${Version}' tinyxml2 2>/dev/null || echo 'unknown')"
         TINY_OR_XMLRPC="tinyxml2 ($VERSION)"
     else
         TINY_OR_XMLRPC="xmlrpc-c ($XMLRPC_VERSION)"
     fi
-    cat <<EOF > "$PKG_DIR/DEBIAN/control"
-Package: rtorrent-${PACKAGE_STABILITY}
-Version: $REAL_VERSION
-Architecture: $ARCHITECTURE
-Maintainer: ${COMMITTER_NAME} <${COMMITTER_EMAIL}>
-Installed-Size: $runtime_size
-Depends: libc6 (>= 2.36), libncurses
-Section: net
-Priority: optional
-Homepage: https://rakshasa.github.io/rtorrent/
-Description: ncurses BitTorrent client based on LibTorrent from rakshasa
-  rtorrent is a BitTorrent client based on LibTorrent.  It uses ncurses
-  and aims to be a lean, yet powerful BitTorrent client, with features
-  similar to the most complex graphical clients.
-  .
-  Since it is a terminal application, it can be used with the "screen"/"dtach"
-  utility so that the user can conveniently logout from the system while keeping
-  the file transfers active.
-  .
-  Some of the features of rtorrent include:
-   * Use an URL or file path to add torrents at runtime
-   * Stop/delete/resume torrents
-   * Optionally loads/saves/deletes torrents automatically in a session
-     directory
-   * Safe fast resume support
-   * Detailed information about peers and the torrent
-   * Support for distributed hash tables (DHT)
-   * Support for peer-exchange (PEX)
-   * Support for initial seeding (Superseeding)
-  .
-  This build includes :
-   * libtorrent (= $LIBTORRENT_VERSION)
-   * $TINY_OR_XMLRPC, 
-   * mktorrent (= $MKTORRENT_VERSION), 
-   * libudns (= $LIBUDNS_VERSION),
-   * dumptorrent (= $DUMPTORRENT_VERSION).
-  .
-  It is optimized for performance and ready for use with MediaEase.
-  .
-  Compiled on $(date +%Y-%m-%d)
-EOF
-    echo "Generating md5sums..."
-    (
-        cd "$PKG_DIR"
-        find . -type f ! -path "./DEBIAN/*" -exec md5sum {} \; > DEBIAN/md5sums
-    )
-    cat <<'EOF' > "$PKG_DIR/DEBIAN/postinst"
-#!/bin/sh
-set -e
-case "$1" in
-    configure)
-        PKG_NAME="${DPKG_MAINTSCRIPT_PACKAGE}"
-        PKG_VERSION="$(dpkg-query -W -f='${Version}' "${PKG_NAME}")"
-        BASE_VERSION="${PKG_VERSION%-*}"
-        INSTALL_BASE="/opt/MediaEase/.binaries/installed/${PKG_NAME}_${BASE_VERSION}"
-        INSTALL_USR="${INSTALL_BASE}/usr"
-        ENV_FILE="${INSTALL_BASE}/.env"
-        case "${PKG_NAME}" in
-        *-next)
-            PRIORITY=60
-            ;;
-        *-oldstable)
-            PRIORITY=40
-            ;;
-        *-stable)
-            PRIORITY=50
-            ;;
-        *)
-            PRIORITY=40
-            ;;
-        esac
-        if [ -d "${INSTALL_USR}/include/torrent" ]; then
-            update-alternatives --install \
-                /usr/include/torrent torrent \
-                "${INSTALL_USR}/include/torrent" ${PRIORITY}
-        fi
-        if [ -f "${INSTALL_USR}/lib/pkgconfig/libtorrent.pc" ]; then
-            update-alternatives --install \
-                /usr/lib/x86_64-linux-gnu/pkgconfig/libtorrent.pc libtorrent.pc \
-                "${INSTALL_USR}/lib/pkgconfig/libtorrent.pc" ${PRIORITY}
-        fi
-        cat > "${ENV_FILE}" <<EOF2
-export CPATH="${INSTALL_BASE}/include:\$CPATH"
-export C_INCLUDE_PATH="${INSTALL_BASE}/include:\$C_INCLUDE_PATH"
-export CPLUS_INCLUDE_PATH="${INSTALL_BASE}/include:\$CPLUS_INCLUDE_PATH"
-export LIBRARY_PATH="${INSTALL_BASE}/lib:\$LIBRARY_PATH"
-export LD_LIBRARY_PATH="${INSTALL_BASE}/lib:\$LD_LIBRARY_PATH"
-export PKG_CONFIG_PATH="${INSTALL_BASE}/lib/pkgconfig:\$PKG_CONFIG_PATH"
-export PATH="${INSTALL_BASE}/bin:\$PATH"
-EOF2
-        if command -v mandb >/dev/null 2>&1; then
-            mandb || true
-        fi
-    ;;
-    abort-upgrade|abort-install|abort-remove)
-    ;;
-    *)
-    ;;
-esac
-
-exit 0
-EOF
-    cat <<'EOF' > "$PKG_DIR/DEBIAN/prerm"
-#!/bin/sh
-set -e
-case "$1" in
-    remove|deconfigure)
-        PKG_NAME="${DPKG_MAINTSCRIPT_PACKAGE:-rtorrent-stable}"
-        PKG_VERSION="$(dpkg-query -W -f='${Version}' "${PKG_NAME}")"
-        BASE_VERSION="${PKG_VERSION%-*}"
-        INSTALL_BASE="/opt/MediaEase/.binaries/installed/${PKG_NAME}_${BASE_VERSION}"
-        INSTALL_USR="${INSTALL_BASE}/usr"
-        if [ -d "${INSTALL_USR}/include/torrent" ]; then
-            update-alternatives --remove torrent "${INSTALL_USR}/include/torrent" || true
-        fi
-        if [ -f "${INSTALL_USR}/lib/pkgconfig/libtorrent.pc" ]; then
-            update-alternatives --remove libtorrent.pc "${INSTALL_USR}/lib/pkgconfig/libtorrent.pc" || true
-        fi
-    ;;
-    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
-    ;;
-    *)
-        echo "prerm called with an unknown argument \`$1\`" >&2
-        exit 1
-    ;;
-esac
-exit 0
-EOF
-    chmod 755 "$PKG_DIR/DEBIAN/postinst" "$PKG_DIR/DEBIAN/prerm"
-    package_name="rtorrent-${PACKAGE_STABILITY}_${REAL_VERSION}_lt${LIBTORRENT_VERSION}-1build1_${ARCHITECTURE}.deb"
+    sed -i \
+        -e "s|@PACKAGE_STABILITY@|${PACKAGE_STABILITY}|g" \
+        -e "s|@REVISION@|1build1|g" \
+        -e "s|@ARCHITECTURE@|${ARCHITECTURE}|g" \
+        -e "s|@VERSION@|${REAL_VERSION}|g" \
+        -e "s|@DATE@|$(date +%Y-%m-%d)|g" \
+        -e "s|@LIBTORRENT_VERSION@|${LIBTORRENT_VERSION}|g" \
+        -e "s|@TINY_OR_XMLRPC@|${TINY_OR_XMLRPC}|g" \
+        -e "s|@MKTORRENT_VERSION@|${MKTORRENT_VERSION}|g" \
+        -e "s|@LIBUDNS_VERSION@|${LIBUDNS_VERSION}|g" \
+        -e "s|@DUMPTORRENT_VERSION@|${DUMPTORRENT_VERSION}|g" \
+        -e "s|@SIZE@|$(du -s -k "$PKG_DIR/opt" | cut -f1)|g" \
+        "$DEB_DIR/control"
+    cat "$DEB_DIR/control"
+    echo "====> Generating md5sums"
+    find "$PKG_DIR" -type f ! -path './DEBIAN/*' -exec md5sum {} \; > "$DEB_DIR/md5sums"
+    chmod 755 "$DEB_DIR/postinst" "$DEB_DIR/prerm"
+    package_name="rtorrent-${PACKAGE_STABILITY}_${REAL_VERSION}_lt_${LIBTORRENT_VERSION}-1build1_${os}_${ARCHITECTURE}.deb"
     cd "$WHEREAMI"
     dpkg-deb --build -Zxz -z9 -Sextreme --root-owner-group "$PKG_DIR" "${package_name}"
     package_location=$(find "$WHEREAMI" -name "$package_name")
@@ -443,14 +398,17 @@ EOF
         echo "ERROR: Package not found."
         exit 1
     fi
+    set +e
 }
 
 # -----------------------------------------------------------------------------
 # Sequential execution of builds
 # -----------------------------------------------------------------------------
+build_dumptorrent
 build_libudns
 build_xmlrpc
 build_mktorrent
+check_package_versions
 build_libtorrent
 build_rtorrent
 package_rtorrent_deb

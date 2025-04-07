@@ -2,39 +2,32 @@
 set -e
 
 # =============================================================================
-# build-transmission.sh
+# build.sh
 #
-# Ce script compile Transmission en statique en mode ligne de commande
-# pour une utilisation sur serveur dédié
+# This script compiles Transmission statically in command-line mode
+# for use on a dedicated server
 #
 # Usage:
 # ./build-transmission.sh <VERSION>
-# Exemple:
+# Example:
 # ./build-transmission.sh 4.0.6
 #
 # Notes:
-# - Versions supportées:
-#   - 3.00 - oldstable
-#   - 4.0.6 - stable 
-#   - 4.1.0-beta.2 - next
+# - Supported versions:
+# - 3.00 - oldstable
+# - 4.0.6 - stable
+# - 4.1.0-beta2 - next
 # =============================================================================
-
-usage() {
-    echo "Usage: $0 <VERSION>"
-    echo "Example: $0 4.0.6"
-    echo "Supported versions: 3.00, 4.0.6, 4.1.0-beta.2"
-    exit 1
-}
 
 # Analyser les arguments
 if [ $# -ne 1 ]; then
-    usage
+    echo "Usage: $0 <VERSION>"
 fi
 
 INPUT_VERSION="$1"
 
 # -----------------------------------------------------------------------------
-# 0) Paramètres et variables globales
+# 0) Global variables
 # -----------------------------------------------------------------------------
 TRANSMISSION_VERSION="${INPUT_VERSION}"
 BUILD="1build1"
@@ -42,20 +35,20 @@ FULL_VERSION="${TRANSMISSION_VERSION}-${BUILD}"
 CREATE_DEB="true"
 
 case "$TRANSMISSION_VERSION" in
-    "3.00")
-        TAG="3.00"
+    "4.0.3" | "4.0.4" | "4.0.5")
+        TAG="$TRANSMISSION_VERSION"
         STABILITY="oldstable"
         ;;
     "4.0.6")
         TAG="4.0.6"
         STABILITY="stable"
         ;;
-    "4.1.0-beta.2")
+    "4.1.0-beta.2" | "4.1.0-beta2")
         TAG="4.1.0-beta.2"
         STABILITY="next"
         ;;
     *)
-        echo "ERROR: Unsupported version. Supported versions are: 3.00, 4.0.6, 4.1.0-beta.2"
+        echo "ERROR: Unsupported version. Only 4.0.3, 4.0.4, 4.0.5, 4.0.6 and 4.1.0-beta.2 are supported yet."
         exit 1
         ;;
 esac
@@ -73,22 +66,13 @@ mkdir -p "$INSTALL_DIR"
 ARCHITECTURE=$(dpkg --print-architecture)
 CORES=$(nproc)
 
-# -----------------------------------------------------------------------------
-# 1) Installer les dépendances de base
-# -----------------------------------------------------------------------------
-install_dependencies() {
-    echo "====> Installing required dependencies"
-    sudo apt-get update
-    local packages
-    packages="build-essential cmake pkg-config libssl-dev zlib1g-dev libcurl4-openssl-dev intltool libsystemd-dev libminiupnpc-dev libnatpmp-dev"
-    sudo apt-get install -y "$packages"
-}
 
 # -----------------------------------------------------------------------------
-# 2) Télécharger et compiler Transmission
+# 1) Download and build Transmission
 # -----------------------------------------------------------------------------
 build_transmission() {
     echo "====> Downloading and building Transmission $TRANSMISSION_VERSION"
+    sudo apt install libnatpmp-dev libminiupnpc-dev
     local SRC_DIR="$BASE_DIR/transmission-$TRANSMISSION_VERSION"
     echo "====> Cleaning any existing Transmission directories"
     cd "$BASE_DIR"
@@ -102,19 +86,26 @@ build_transmission() {
     echo "====> Configuring Transmission with CMake (static build)"
     export CFLAGS="-O3 -fPIC"
     export CXXFLAGS="-O3 -fPIC"
-    local CMAKE_OPTS=""
-    if [[ "$TRANSMISSION_VERSION" == "3.00" ]]; then
-        CMAKE_OPTS="-DENABLE_GTK=OFF -DENABLE_QT=OFF"
-    else
-        CMAKE_OPTS="-DENABLE_GTK=OFF -DENABLE_QT=OFF -DENABLE_MAC=OFF -DENABLE_TESTS=OFF -DUSE_SYSTEM_MINIUPNPC=ON -DUSE_SYSTEM_NATPMP=ON"
-    fi
+    local CMAKE_OPTS=""  
+    CMAKE_OPTS="-DENABLE_GTK=OFF \
+                -DENABLE_CLI=ON \
+                -DENABLE_UTILS=ON \
+                -DENABLE_DAEMON=ON \
+                -DINSTALL_WEB=ON \
+                -DENABLE_NLS=ON \
+                -DINSTALL_LIB=ON \
+                -DENABLE_QT=OFF \
+                -DENABLE_MAC=OFF \
+                -DENABLE_TESTS=OFF \
+                -DUSE_SYSTEM_MINIUPNPC=ON \
+                -DUSE_SYSTEM_NATPMP=ON"
     
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=$PREFIX \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DBUILD_SHARED_LIBS=OFF \
-        "$CMAKE_OPTS"
+        $CMAKE_OPTS
     echo "====> Building Transmission"
     make -j"$CORES"
     echo "====> Installing Transmission to $INSTALL_DIR"
@@ -123,7 +114,7 @@ build_transmission() {
 }
 
 # -----------------------------------------------------------------------------
-# 3) Créer le package final
+# 2) Create the Transmission package
 # -----------------------------------------------------------------------------
 create_package() {
     echo "====> Creating Transmission package"
@@ -149,15 +140,21 @@ create_package() {
     
     if [ -n "$CREATE_DEB" ] && [ "$CREATE_DEB" = "true" ]; then
         echo "====> Creating Debian package"
-        local PKG_DIR="$BASE_DIR/deb-pkg"
-        local PACKAGE_NAME="transmission-${STABILITY}_${TRANSMISSION_VERSION}-${BUILD}_${ARCHITECTURE}.deb"
+        local PKG_DIR os_name codename os PACKAGE_NAME INSTALL_PATH INSTALLED_SIZE
+        PKG_DIR="$BASE_DIR/deb-pkg"
+        os_name=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
+        codename=$(lsb_release -cs)
+        os="${os_name}-${codename}"
+        PACKAGE_NAME="transmission-${STABILITY}_${TRANSMISSION_VERSION}-${BUILD}_${os}_${ARCHITECTURE}.deb"
         rm -rf "$PKG_DIR"
         mkdir -p "$PKG_DIR/DEBIAN"
-        local INSTALL_PATH="/opt/MediaEase/.binaries/installed/transmission-${STABILITY}_${TRANSMISSION_VERSION}"
+        INSTALL_PATH="/opt/MediaEase/.binaries/installed/transmission-${STABILITY}_${TRANSMISSION_VERSION}"
         mkdir -p "$PKG_DIR/$INSTALL_PATH"
         cp -r "$INSTALL_DIR$PREFIX" "$PKG_DIR/$INSTALL_PATH/"
-        find "$PKG_DIR" -type f -exec file {} \; | grep ELF | cut -d: -f1 | xargs --no-run-if-empty strip --strip-unneeded
-        local INSTALLED_SIZE
+        find "$PKG_DIR" -type f -executable -exec file {} \; \
+            | grep "ELF.*executable" \
+            | cut -d: -f1 \
+            | xargs --no-run-if-empty -I{} sh -c 'echo "Processing: {}" && strip --strip-unneeded "{}" && echo "  ✓ Stripped" && if command -v upx >/dev/null 2>&1; then upx --best --lzma "{}" && echo "  ✓ Compressed with UPX"; else echo "  ℹ UPX not available"; fi' || echo "Warning: Some files could not be processed"
         INSTALLED_SIZE="$(du -sk "$PKG_DIR/opt" | cut -f1)"
         cat > "$PKG_DIR/DEBIAN/control" << EOF
 Package: transmission-${STABILITY}
@@ -165,7 +162,8 @@ Version: ${TRANSMISSION_VERSION}-${BUILD}
 Architecture: ${ARCHITECTURE}
 Maintainer: ${COMMITTER_NAME} <${COMMITTER_EMAIL}>
 Installed-Size: ${INSTALLED_SIZE}
-Depends: libssl3, libcurl4, libsystemd0, libminiupnpc17 | libminiupnpc10, libnatpmp1, libc6, zlib1g
+Depends: libssl3, libcurl4, libsystemd0, libminiupnpc17 | libminiupnpc10, libnatpmp1, libc6, zlib1g, libminiupnpc-dev, libnatpmp-dev
+Conflicts: transmission-daemon, transmission-cli, transmission-common, transmission-remote-gtk, transmission-qt, transmission-gtk, libtransmission-client-perl
 Section: net
 Priority: optional
 Homepage: https://transmissionbt.com/
@@ -276,7 +274,6 @@ EOF
 # -----------------------------------------------------------------------------
 # Main execution
 # -----------------------------------------------------------------------------
-install_dependencies
 build_transmission
 create_package
 
