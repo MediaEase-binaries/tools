@@ -1,0 +1,18 @@
+Package: deluge
+Version: $FULL_VERSION
+Architecture: $ARCHITECTURE
+Maintainer: ${COMMITTER_NAME} <${COMMITTER_EMAIL}>
+Installed-Size: ${INSTALLED_SIZE}
+Priority: optional
+Section: net
+Homepage: https://deluge-torrent.org/
+Description: BitTorrent client (CLI tools, daemon and web UI)
+  Deluge BitTorrent client compiled for server usage.
+  Contains CLI tools, daemon and web interface.
+  .
+  This package contains:
+   * CLI tools: deluge-console
+   * Daemon: deluged
+   * Web UI: deluge-web
+  .
+  Compiled on $(date +%Y-%m-%d)

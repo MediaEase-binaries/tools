@@ -2,21 +2,21 @@
 set -e
 
 # =============================================================================
-# build-transmission.sh
+# build.sh
 #
-# Ce script compile Transmission en statique en mode ligne de commande
-# pour une utilisation sur serveur dédié
+# This script compiles Transmission statically in command-line mode
+# for use on a dedicated server
 #
 # Usage:
 # ./build-transmission.sh <VERSION>
-# Exemple:
+# Example:
 # ./build-transmission.sh 4.0.6
 #
 # Notes:
-# - Versions supportées:
-#   - 3.00 - oldstable
-#   - 4.0.6 - stable 
-#   - 4.1.0-beta.2 - next
+# - Supported versions:
+# - 3.00 - oldstable
+# - 4.0.6 - stable
+# - 4.1.0-beta.2 - next
 # =============================================================================
 
 usage() {
@@ -34,7 +34,7 @@ fi
 INPUT_VERSION="$1"
 
 # -----------------------------------------------------------------------------
-# 0) Paramètres et variables globales
+# 0) Global variables
 # -----------------------------------------------------------------------------
 TRANSMISSION_VERSION="${INPUT_VERSION}"
 BUILD="1build1"
@@ -74,7 +74,7 @@ ARCHITECTURE=$(dpkg --print-architecture)
 CORES=$(nproc)
 
 # -----------------------------------------------------------------------------
-# 1) Installer les dépendances de base
+# 1) Install required dependencies
 # -----------------------------------------------------------------------------
 install_dependencies() {
     echo "====> Installing required dependencies"
@@ -85,7 +85,7 @@ install_dependencies() {
 }
 
 # -----------------------------------------------------------------------------
-# 2) Télécharger et compiler Transmission
+# 2) Download and build Transmission
 # -----------------------------------------------------------------------------
 build_transmission() {
     echo "====> Downloading and building Transmission $TRANSMISSION_VERSION"
@@ -123,7 +123,7 @@ build_transmission() {
 }
 
 # -----------------------------------------------------------------------------
-# 3) Créer le package final
+# 3) Create the Transmission package
 # -----------------------------------------------------------------------------
 create_package() {
     echo "====> Creating Transmission package"

@@ -1,0 +1,16 @@
+Package: qbittorrent-@STABILITY@
+Version: @VERSION@-1build1
+Architecture: @ARCH@
+Maintainer: @MAINTAINER_NAME@ <@MAINTAINER_EMAIL@>
+Priority: optional
+Section: net
+Description: qBittorrent BitTorrent client (no GUI version)
+ qBittorrent is a free and reliable P2P BitTorrent client.
+ This package contains the no-GUI version of qBittorrent.
+ .
+ Features:
+  * Web UI interface
+  * Remote control via Web UI
+  * RSS feed support
+  * Bittorrent protocol support
+  * DHT, PEX, and encryption support

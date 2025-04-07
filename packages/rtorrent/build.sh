@@ -89,7 +89,6 @@ mkdir -p "$BASE_DIR"
 INSTALL_DIR="$BASE_DIR/install"
 mkdir -p "$INSTALL_DIR"
 PATCH_DIR="$BASE_DIR/patches"
-# find the extras dir
 EXTRAS_DIR="$(find /home/runner/work/ -type d -name "extras" | head -n 1)"
 EXTRAS_DIR="$EXTRAS_DIR/rtorrent"
 
@@ -118,7 +117,7 @@ build_libudns() {
     local TMP_DIR
     TMP_DIR=$(mktemp -d)
     dpkg-deb -x "$EXTRAS_DIR/libudns_0.6.0-ipv6-ON-1build1_ubuntu-latest_amd64.deb" "$TMP_DIR"
-    sudo cp -r "$TMP_DIR/usr/" "$INSTALL_DIR/usr/"
+    sudo cp -r "$TMP_DIR/usr/*" "$INSTALL_DIR/usr/"
     local LIBUDNS_VERSION
     LIBUDNS_VERSION="$(dpkg-query -W -f='${Version}' libudns)"
     export LIBUDNS_VERSION
@@ -136,7 +135,7 @@ build_xmlrpc() {
         XMLRPC_VERSION="1.64.01"
     fi
     if [ -n "$XMLRPC_VERSION" ]; then
-        local PKGNAME="xmlrpc-c"
+        local PKGNAME="libxmlrpc-c3"
         local PKGFILE="$(find "$EXTRAS_DIR" -name "${PKGNAME}_${XMLRPC_VERSION}*.deb" | head -n 1)"
         if [ -z "$PKGFILE" ]; then
             echo "ERROR: Unable to find xmlrpc-c package file."
@@ -146,7 +145,7 @@ build_xmlrpc() {
         local TMP_DIR
         TMP_DIR=$(mktemp -d)
         dpkg-deb -x "$PKGFILE" "$TMP_DIR"
-        sudo cp -r "$TMP_DIR/usr/" "$INSTALL_DIR/usr/"
+        sudo cp -r "$TMP_DIR/usr/*" "$INSTALL_DIR/usr/"
         rm -rf "$TMP_DIR"
         export XMLRPC_VERSION
     else
