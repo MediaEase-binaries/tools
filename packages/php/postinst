@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+# Get package version from dpkg
+version=$(dpkg-query -W -f='${Version}' php-static | cut -d- -f1)
+
+case "$1" in
+    configure|abort-upgrade)
+        update-alternatives --install /usr/bin/php     php     /usr/bin/php${version}/php      100
+        update-alternatives --install /usr/bin/php-fpm php-fpm /usr/sbin/php${version}/php-fpm 100
+    ;;
+    remove|purge)
+        update-alternatives --remove php /usr/bin/php${version} || true
+        update-alternatives --remove php-fpm /usr/sbin/php-fpm${version} || true
+    ;;
+esac
+
+exit 0

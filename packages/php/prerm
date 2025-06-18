@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+# Get package version from dpkg
+version=$(dpkg-query -W -f='${Version}' php-static | cut -d- -f1)
+
+case "$1" in
+    remove|purge)
+    update-alternatives --remove php     /usr/bin/php${version}/php      || true
+    update-alternatives --remove php-fpm /usr/sbin/php${version}/php-fpm || true
+    ;;
+esac
+
+exit 0

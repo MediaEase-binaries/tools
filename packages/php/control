@@ -1,0 +1,22 @@
+Package: php-static
+Version: @VERSION@
+Architecture: @ARCHITECTURE@
+Maintainer: @MAINTAINER@
+Installed-Size: @SIZE@
+Depends: libc6
+Section: web
+Priority: optional
+Conflicts: php, php-cli, php-fpm, php7.4, php7.4-cli, php7.4-fpm, php8.1, php8.1-cli, php8.1-fpm, php8.2, php8.2-cli, php8.2-fpm, php8.3, php8.3-cli, php8.3-fpm, php8.4, php8.4-cli, php8.4-fpm
+Provides: php, php-cli, php-fpm
+Homepage: https://github.com/MediaEase/php-builds
+Description: PHP static binary
+ PHP Static is a custom PHP distribution optimized for MediaEase applications.
+ .
+ This package provides static PHP CLI and FPM binaries with essential extensions
+ and optimized configuration for MediaEase applications.
+ .
+ Version: @VERSION@
+ .
+ Modules enabled: @MODULES@
+ .
+ Compiled on @DATE@.
