@@ -155,15 +155,20 @@ def build_packages_table(
 def render_body(
     product_cfg: dict[str, Any], version: str, packages_table: str
 ) -> str:
+    """Substitute known placeholders only (template may contain JSON with `{` `}`)."""
     tpl = TEMPLATE_FILE.read_text(encoding="utf-8")
     title = product_cfg.get("title", "Package")
     license_block = (product_cfg.get("license") or "").strip()
-    return tpl.format(
-        product_title=title,
-        version=version,
-        packages_table=packages_table.strip(),
-        license=license_block,
-    )
+    replacements = {
+        "{product_title}": title,
+        "{version}": version,
+        "{packages_table}": packages_table.strip(),
+        "{license}": license_block,
+    }
+    body = tpl
+    for placeholder, value in replacements.items():
+        body = body.replace(placeholder, value)
+    return body
 
 
 def append_github_output(key: str, value: str) -> None:
